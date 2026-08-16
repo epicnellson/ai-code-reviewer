@@ -33,17 +33,52 @@ python -m pip install -e .
 ### Requirements
 
 - Python 3.10 or newer
-- A Groq API key (set as `GROQ_API_KEY`)
+- Either a Groq API key (direct mode) or a hosted backend URL (client mode, no key needed)
 
 ### Configuration
 
-Copy `.env.example` to `.env` and add your API key:
+Copy `.env.example` to `.env` and configure your access method:
 
 ```bash
 cp .env.example .env
 ```
 
-The tool reads `GROQ_API_KEY` from your environment or `.env` (via `python-dotenv`). The GitHub Actions workflow instead uses the `GROQ_API_KEY` repository secret.
+- **Direct mode:** set `GROQ_API_KEY` in your environment or `.env` (via `python-dotenv`). The GitHub Actions workflow instead uses the `GROQ_API_KEY` repository secret.
+- **Client mode:** set `AI_REVIEW_API_URL` (and optionally `AI_REVIEW_API_TOKEN`) to point at a hosted backend. No Groq key required on the client.
+
+---
+
+## Hosted Backend (no API key for users)
+
+Deploy the review server once; it holds the Groq API key and every CLI user talks to it.
+
+### Deploy the server
+
+```bash
+pip install "ai-code-reviewer[server]"
+
+# Server side: it needs the Groq key, not the clients.
+GROQ_API_KEY=gsk_... AI_REVIEW_API_TOKEN=my-secret ai-review-server
+```
+
+- `ai-review-server` listens on `0.0.0.0:8000` by default (`AI_REVIEW_HOST` / `AI_REVIEW_PORT`).
+- `AI_REVIEW_API_TOKEN` is optional; when set, clients must send it as a bearer token.
+- `GET /health` for health checks. `POST /api/review/file` and `POST /api/review/diff` are the review endpoints.
+- For production, run it behind a reverse proxy (nginx/Caddy) with TLS, and consider rate limiting.
+
+### Use it as a client
+
+Users just set the backend URL — no key:
+
+```bash
+export AI_REVIEW_API_URL=https://review.example.com
+export AI_REVIEW_API_TOKEN=my-secret   # only if the server requires one
+
+ai-code-review --file app.py
+ai-code-review --diff HEAD~1 --ci
+```
+
+The client sends code and guidelines to the backend, which performs chunking and LLM review; exit codes and `--format json` behave exactly as in direct mode.
 
 ---
 
@@ -187,12 +222,13 @@ python -m pytest
 
 ```
 reviewer/
-  analyzer.py        Review orchestration, chunked analysis, result merging
+  analyzer.py        Review orchestration: chunked analysis, merging, client/direct modes
   parser.py          tree-sitter AST extraction and logical chunking
   prompt_builder.py  LLM prompt construction with schema + guidelines
   guidelines.py      .ai-review.toml / guidelines.md loading
   git_utils.py       Git diff extraction and repo root resolution
   reporter.py        text / JSON output formatting
+  server.py          Hosted backend (ai-review-server)
 main.py              CLI entry point (ai-code-review)
 tests/               Unit + integration tests (pytest)
 ```

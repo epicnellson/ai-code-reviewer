@@ -1,6 +1,8 @@
 import json
 import logging
 import os
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -31,18 +33,42 @@ SYSTEM_PROMPT = (
 
 
 class Analyzer:
-    """Analyzes source files using the Groq LLM API."""
+    """Analyzes source files using the Groq LLM API or a hosted review backend.
 
-    def __init__(self, timeout: int = 60, max_tokens: int = 6000) -> None:
-        """Initializes the Analyzer with the Groq API client."""
-        api_key = os.environ.get("GROQ_API_KEY")
-        if not api_key:
-            raise ValueError("GROQ_API_KEY is missing from environment variables.")
-        self.client = Groq(api_key=api_key)
-        # Using Llama 3 for structured JSON output compatibility on Groq
-        self.model = "llama-3.3-70b-versatile"
+    Two operating modes are supported:
+
+    - Direct mode: requires ``GROQ_API_KEY`` and calls the Groq API directly.
+    - Client mode: configured via ``api_url`` (or the ``AI_REVIEW_API_URL``
+      environment variable). The analyzer sends review requests to a hosted
+      backend (see ``reviewer/server.py``), so users never need their own
+      Groq key.
+    """
+
+    def __init__(
+        self,
+        timeout: int = 60,
+        max_tokens: int = 6000,
+        api_url: str | None = None,
+        api_token: str | None = None,
+    ) -> None:
+        """Initializes the Analyzer in direct or client mode."""
+        self.api_url = (api_url or os.environ.get("AI_REVIEW_API_URL") or "").strip().rstrip("/")
+        self.api_token = api_token or os.environ.get("AI_REVIEW_API_TOKEN") or ""
         self.timeout = timeout
         self.max_tokens = max_tokens
+        self.model = "llama-3.3-70b-versatile"
+
+        if self.api_url:
+            self.client = None
+            return
+
+        api_key = os.environ.get("GROQ_API_KEY")
+        if not api_key:
+            raise ValueError(
+                "No review backend configured. Set GROQ_API_KEY for direct mode, "
+                "or AI_REVIEW_API_URL to use a hosted backend."
+            )
+        self.client = Groq(api_key=api_key)
 
     def analyze_file(
         self,
@@ -94,12 +120,20 @@ class Analyzer:
             )
 
         guidelines = load_guidelines(guidelines_path, repo_path=target_root or os.getcwd())
-        chunks = chunk_code(code_content, max_tokens=self.max_tokens)
+
+        if not self.client:
+            return self._remote_file_review(resolved_path, code_content, guidelines)
+
+        return self._review_content(resolved_path, code_content, guidelines)
+
+    def _review_content(self, path: str, content: str, guidelines: str) -> CodeReviewResult:
+        """Chunks ``content``, reviews each chunk via the LLM, and merges the results."""
+        chunks = chunk_code(content, max_tokens=self.max_tokens)
 
         if len(chunks) == 1:
             prompt = build_review_prompt(
                 chunks[0].content,
-                resolved_path,
+                path,
                 guidelines=guidelines,
             )
             return self._request_review(prompt)
@@ -108,7 +142,7 @@ class Analyzer:
         for chunk in chunks:
             prompt = build_review_prompt(
                 chunk.content,
-                resolved_path,
+                path,
                 guidelines=guidelines,
                 chunk_header=chunk.header,
             )
@@ -144,8 +178,65 @@ class Analyzer:
             )
 
         guidelines = load_guidelines(guidelines_path, repo_path=repo_path or os.getcwd())
+
+        if not self.client:
+            return self._remote_diff_review(file_diffs, guidelines)
+
         prompt = build_diff_review_prompt(file_diffs, guidelines=guidelines)
         return self._request_review(prompt)
+
+    def _remote_file_review(self, path: str, content: str, guidelines: str) -> CodeReviewResult:
+        """Sends a whole-file review request to the hosted backend."""
+        payload = {
+            "path": path,
+            "content": content,
+            "guidelines": guidelines,
+            "max_tokens": self.max_tokens,
+        }
+        return self._http_post("/api/review/file", payload)
+
+    def _remote_diff_review(
+        self,
+        file_diffs: list["FileDiff"],
+        guidelines: str,
+    ) -> CodeReviewResult:
+        """Sends a git-diff review request to the hosted backend."""
+        payload = {
+            "file_diffs": [
+                {"file_path": d.file_path, "hunks": d.hunks} for d in file_diffs
+            ],
+            "guidelines": guidelines,
+        }
+        return self._http_post("/api/review/diff", payload)
+
+    def _http_post(self, endpoint: str, payload: dict) -> CodeReviewResult:
+        """POSTs a JSON payload to the hosted backend and validates the response."""
+        url = f"{self.api_url}{endpoint}"
+        headers = {"Content-Type": "application/json"}
+        if self.api_token:
+            headers["Authorization"] = f"Bearer {self.api_token}"
+
+        request = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers=headers,
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                data = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode("utf-8", errors="replace") if e.fp else str(e)
+            raise RuntimeError(f"Review backend returned HTTP {e.code}: {detail}") from e
+        except urllib.error.URLError as e:
+            raise RuntimeError(f"Could not reach review backend at {url}: {e.reason}") from e
+        except (json.JSONDecodeError, UnicodeDecodeError) as e:
+            raise RuntimeError(f"Review backend returned an unreadable response: {e}") from e
+
+        try:
+            return CodeReviewResult.model_validate(data)
+        except ValidationError as e:
+            raise RuntimeError(f"Review backend returned an invalid review: {e}") from e
 
     def _request_review(self, prompt: str) -> CodeReviewResult:
         """Sends a prepared prompt to the LLM and validates the JSON response."""

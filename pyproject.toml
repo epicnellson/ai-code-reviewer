@@ -19,8 +19,19 @@ dependencies = [
     "python-dotenv>=1.0.0",
 ]
 
+[project.optional-dependencies]
+server = [
+    "fastapi>=0.110",
+    "uvicorn>=0.27",
+]
+dev = [
+    "pytest>=7.0",
+    "httpx>=0.27",
+]
+
 [project.scripts]
 ai-code-review = "main:main"
+ai-review-server = "reviewer.server:run"
 
 [tool.setuptools]
 packages = ["reviewer"]

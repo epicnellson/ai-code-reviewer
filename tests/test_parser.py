@@ -123,6 +123,8 @@ class AnalyzerChunkingTests(unittest.TestCase):
 
             analyzer = Analyzer.__new__(Analyzer)
             analyzer.max_tokens = 50
+            analyzer.client = object()
+            analyzer.timeout = 60
             calls = {"n": 0}
 
             def fake_request(prompt):
