@@ -6,7 +6,7 @@ import unittest
 import urllib.error
 from unittest.mock import MagicMock, patch
 
-from reviewer.analyzer import Analyzer
+from reviewer.analyzer import Analyzer, DEFAULT_HOSTED_API_URL
 from reviewer.prompt_builder import CodeReviewResult
 
 
@@ -17,12 +17,25 @@ class ClientModeInitTests(unittest.TestCase):
             self.assertIsNone(analyzer.client)
             self.assertEqual(analyzer.api_url, "http://localhost:8000")
 
-    def test_missing_key_and_url_raise(self):
+    def test_defaults_to_hosted_server_when_no_key_or_url(self):
         with patch.dict(os.environ, {}, clear=True):
-            with self.assertRaises(ValueError) as ctx:
-                Analyzer()
-            self.assertIn("GROQ_API_KEY", str(ctx.exception))
-            self.assertIn("AI_REVIEW_API_URL", str(ctx.exception))
+            analyzer = Analyzer()
+            self.assertIsNone(analyzer.client)
+            self.assertEqual(analyzer.api_url, DEFAULT_HOSTED_API_URL)
+            self.assertTrue(analyzer._using_default_server)
+
+    def test_groq_key_takes_precedence_over_env_url(self):
+        with patch.dict(os.environ, {"GROQ_API_KEY": "gsk_test", "AI_REVIEW_API_URL": "http://x"}, clear=True):
+            with patch("reviewer.analyzer.Groq"):
+                analyzer = Analyzer()
+            self.assertIsNotNone(analyzer.client)
+            self.assertEqual(analyzer.api_url, "")
+
+    def test_explicit_api_url_overrides_default(self):
+        with patch.dict(os.environ, {}, clear=True):
+            analyzer = Analyzer(api_url="http://custom:9000")
+            self.assertEqual(analyzer.api_url, "http://custom:9000")
+            self.assertFalse(analyzer._using_default_server)
 
     def test_token_read_from_env(self):
         with patch.dict(
@@ -94,6 +107,49 @@ class ClientModeRequestTests(unittest.TestCase):
         payload = mock_post.call_args.args[1]
         self.assertEqual(payload["file_diffs"], [{"file_path": "a.py", "hunks": "+x"}])
         self.assertEqual(result, self.result)
+
+
+class DefaultServerGracefulErrors(unittest.TestCase):
+    def _make_default_analyzer(self):
+        with patch.dict(os.environ, {}, clear=True):
+            return Analyzer()
+
+    def test_429_shows_busy_message(self):
+        analyzer = self._make_default_analyzer()
+        error = urllib.error.HTTPError(
+            "http://default/api/review/file", 429, "Too Many Requests",
+            {}, io.BytesIO(b"rate limited"),
+        )
+        with patch("urllib.request.urlopen", side_effect=error):
+            with self.assertRaises(RuntimeError) as ctx:
+                analyzer._http_post("/api/review/file", {})
+            msg = str(ctx.exception)
+            self.assertIn("Server is currently busy or unreachable", msg)
+            self.assertIn("export GROQ_API_KEY", msg)
+
+    def test_unreachable_shows_busy_message(self):
+        analyzer = self._make_default_analyzer()
+        error = urllib.error.URLError("connection refused")
+        with patch("urllib.request.urlopen", side_effect=error):
+            with self.assertRaises(RuntimeError) as ctx:
+                analyzer._http_post("/api/review/file", {})
+            msg = str(ctx.exception)
+            self.assertIn("Server is currently busy or unreachable", msg)
+            self.assertIn("export GROQ_API_KEY", msg)
+
+    def test_custom_url_429_shows_original_error(self):
+        with patch.dict(os.environ, {"AI_REVIEW_API_URL": "http://custom:8000"}, clear=True):
+            analyzer = Analyzer()
+        error = urllib.error.HTTPError(
+            "http://custom:8000/api/review/file", 429, "Too Many Requests",
+            {}, io.BytesIO(b"rate limited"),
+        )
+        with patch("urllib.request.urlopen", side_effect=error):
+            with self.assertRaises(RuntimeError) as ctx:
+                analyzer._http_post("/api/review/file", {})
+            msg = str(ctx.exception)
+            self.assertIn("HTTP 429", msg)
+            self.assertNotIn("Server is currently busy", msg)
 
 
 if __name__ == "__main__":

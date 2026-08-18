@@ -1,6 +1,6 @@
 import unittest
 from unittest.mock import patch, MagicMock
-from reviewer.analyzer import Analyzer
+from reviewer.analyzer import Analyzer, DEFAULT_HOSTED_API_URL
 
 class TestAnalyzer(unittest.TestCase):
     
@@ -13,11 +13,12 @@ class TestAnalyzer(unittest.TestCase):
         self.assertIsNotNone(analyzer)
         
     @patch('reviewer.analyzer.os.environ.get')
-    def test_analyzer_missing_api_key(self, mock_env):
-        """Test that the Analyzer raises an error when API key is missing."""
+    def test_analyzer_missing_api_key_falls_back_to_default(self, mock_env):
+        """Test that the Analyzer falls back to DEFAULT_HOSTED_API_URL when no key/url."""
         mock_env.return_value = None
-        with self.assertRaises(ValueError):
-            Analyzer()
+        analyzer = Analyzer()
+        self.assertEqual(analyzer.api_url, DEFAULT_HOSTED_API_URL)
+        self.assertIsNone(analyzer.client)
 
 if __name__ == "__main__":
     unittest.main()

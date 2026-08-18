@@ -245,7 +245,7 @@ class HealthCheckTests(unittest.TestCase):
         mock_response = mock_urlopen.return_value.__enter__.return_value
         mock_response.status = 200
 
-        with patch.dict(os.environ, {"AI_REVIEW_API_URL": "http://localhost:9999"}, clear=False):
+        with patch.dict(os.environ, {"AI_REVIEW_API_URL": "http://localhost:9999"}, clear=True):
             analyzer = Analyzer()
             self.assertTrue(analyzer.check_health(timeout=3))
 
@@ -260,7 +260,7 @@ class HealthCheckTests(unittest.TestCase):
 
         mock_urlopen.side_effect = urllib.error.URLError("connection refused")
 
-        with patch.dict(os.environ, {"AI_REVIEW_API_URL": "http://localhost:9999"}, clear=False):
+        with patch.dict(os.environ, {"AI_REVIEW_API_URL": "http://localhost:9999"}, clear=True):
             analyzer = Analyzer()
             self.assertFalse(analyzer.check_health())
 
@@ -274,7 +274,7 @@ class HealthCheckTests(unittest.TestCase):
         with patch.dict(
             os.environ,
             {"AI_REVIEW_API_URL": "http://localhost:9999", "AI_REVIEW_API_TOKEN": "tok123"},
-            clear=False,
+            clear=True,
         ):
             analyzer = Analyzer()
             analyzer.check_health()

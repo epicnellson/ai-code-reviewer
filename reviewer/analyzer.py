@@ -25,6 +25,14 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_HOSTED_API_URL = "https://your-hosted-server-url.com"
+
+_SERVER_BUSY_MESSAGE = (
+    "Server is currently busy or unreachable. "
+    "You can also run locally by providing your own API key: "
+    "export GROQ_API_KEY='your-key'"
+)
+
 SYSTEM_PROMPT = (
     "You are a senior software engineer conducting a thorough code review. "
     "You must respond ONLY in valid JSON matching the requested structure. "
@@ -51,24 +59,48 @@ class Analyzer:
         api_url: str | None = None,
         api_token: str | None = None,
     ) -> None:
-        """Initializes the Analyzer in direct or client mode."""
-        self.api_url = (api_url or os.environ.get("AI_REVIEW_API_URL") or "").strip().rstrip("/")
-        self.api_token = api_token or os.environ.get("AI_REVIEW_API_TOKEN") or ""
+        """Initializes the Analyzer in direct, custom-hosted, or default-hosted mode.
+
+        Resolution order:
+        1. If *api_url* is passed → Custom hosted mode (always).
+        2. ``GROQ_API_KEY`` is set → Direct mode (Groq API).
+        3. ``AI_REVIEW_API_URL`` is set → Custom hosted mode.
+        4. Otherwise → Default hosted mode (uses ``DEFAULT_HOSTED_API_URL``).
+        """
         self.timeout = timeout
         self.max_tokens = max_tokens
         self.model = "llama-3.3-70b-versatile"
+        self._using_default_server = False
 
-        if self.api_url:
+        # Explicit api_url parameter always wins → custom hosted mode
+        explicit_url = (api_url or "").strip().rstrip("/")
+        if explicit_url:
             self.client = None
+            self.api_url = explicit_url
+            self.api_token = api_token or os.environ.get("AI_REVIEW_API_TOKEN") or ""
             return
 
+        # Tier 1: GROQ_API_KEY → direct Groq mode
         api_key = os.environ.get("GROQ_API_KEY")
-        if not api_key:
-            raise ValueError(
-                "No review backend configured. Set GROQ_API_KEY for direct mode, "
-                "or AI_REVIEW_API_URL to use a hosted backend."
-            )
-        self.client = Groq(api_key=api_key)
+        if api_key:
+            self.client = Groq(api_key=api_key)
+            self.api_url = ""
+            self.api_token = api_token or os.environ.get("AI_REVIEW_API_TOKEN") or ""
+            return
+
+        # Tier 2: AI_REVIEW_API_URL env → custom hosted mode
+        env_url = (os.environ.get("AI_REVIEW_API_URL") or "").strip().rstrip("/")
+        if env_url:
+            self.client = None
+            self.api_url = env_url
+            self.api_token = api_token or os.environ.get("AI_REVIEW_API_TOKEN") or ""
+            return
+
+        # Tier 3: no key, no URL → default hosted mode
+        self.client = None
+        self.api_url = DEFAULT_HOSTED_API_URL.rstrip("/")
+        self.api_token = api_token or os.environ.get("AI_REVIEW_API_TOKEN") or ""
+        self._using_default_server = True
 
     def check_health(self, timeout: int = 5) -> bool:
         """Pings the hosted backend's ``/health`` endpoint.
@@ -250,8 +282,12 @@ class Analyzer:
                 data = json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as e:
             detail = e.read().decode("utf-8", errors="replace") if e.fp else str(e)
+            if self._using_default_server and e.code == 429:
+                raise RuntimeError(_SERVER_BUSY_MESSAGE) from e
             raise RuntimeError(f"Review backend returned HTTP {e.code}: {detail}") from e
         except urllib.error.URLError as e:
+            if self._using_default_server:
+                raise RuntimeError(_SERVER_BUSY_MESSAGE) from e
             raise RuntimeError(f"Could not reach review backend at {url}: {e.reason}") from e
         except (json.JSONDecodeError, UnicodeDecodeError) as e:
             raise RuntimeError(f"Review backend returned an unreadable response: {e}") from e

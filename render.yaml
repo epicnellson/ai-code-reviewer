@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: ai-review-server
+    runtime: image
+    image:
+      url: ghcr.io/epicnellson/ai-code-reviewer:latest
+      # Or use Dockerfile directly from the repo:
+      # url: Dockerfile
+    plan: starter
+    healthCheckPath: /health
+    envVars:
+      - key: GROQ_API_KEY
+        sync: false  # Set manually in Render dashboard — never commit secrets
+      - key: AI_REVIEW_API_TOKEN
+        sync: false  # Optional — set to require client bearer auth
+      - key: AI_REVIEW_HOST
+        value: "0.0.0.0"
+      - key: AI_REVIEW_PORT
+        value: "8000"
