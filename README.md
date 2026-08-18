@@ -66,6 +66,36 @@ GROQ_API_KEY=gsk_... AI_REVIEW_API_TOKEN=my-secret ai-review-server
 - `GET /health` for health checks. `POST /api/review/file` and `POST /api/review/diff` are the review endpoints.
 - For production, run it behind a reverse proxy (nginx/Caddy) with TLS, and consider rate limiting.
 
+### Deploy with Docker
+
+Build and run the container locally:
+
+```bash
+docker build -t ai-code-review-server .
+docker run -d -p 8000:8000 \
+  -e GROQ_API_KEY=gsk_... \
+  -e AI_REVIEW_API_TOKEN=my-secret \
+  --name ai-review-server \
+  ai-code-review-server
+```
+
+Verify the server is healthy:
+
+```bash
+curl http://localhost:8000/health
+# → {"status":"ok","service":"ai-code-reviewer"}
+```
+
+To set a custom host or port, pass `AI_REVIEW_HOST` and `AI_REVIEW_PORT` environment variables:
+
+```bash
+docker run -d -p 9000:9000 \
+  -e GROQ_API_KEY=gsk_... \
+  -e AI_REVIEW_HOST=0.0.0.0 \
+  -e AI_REVIEW_PORT=9000 \
+  ai-code-review-server
+```
+
 ### Use it as a client
 
 Users just set the backend URL — no key:
@@ -201,9 +231,9 @@ Because the job exits non-zero on high-severity findings, a failing review autom
 `.github/workflows/publish.yml` builds an sdist and wheel and publishes to PyPI via Trusted Publishers (OIDC) whenever a GitHub Release is published:
 
 ```bash
-gh release create v1.0.0 \
-  --title "v1.0.0 — AI Code Reviewer Initial Release" \
-  --notes "Initial v1.0.0 production release."
+gh release create v1.1.0 \
+  --title "v1.1.0 — Hosted Backend, Docker Build, Client Mode" \
+  --notes "See release notes for details."
 ```
 
 Configure a Trusted Publisher on PyPI pointing at this repository before your first publish.

@@ -1,10 +1,11 @@
+import os
 import unittest
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
 from reviewer.prompt_builder import BugReport, CodeReviewResult
-from reviewer.server import app
+from reviewer.server import app, limiter
 
 client = TestClient(app)
 
@@ -139,12 +140,147 @@ class AuthTests(unittest.TestCase):
 
     @patch("reviewer.server._analyzer")
     def test_no_token_configured_allows_access(self, mock_analyzer_factory):
-        mock_analyzer_factory.return_value = FakeAnalyzer([_result("ok", 8, [])])
+        fake = FakeAnalyzer([_result("ok", 8, [])])
+        mock_analyzer_factory.return_value = fake
         response = client.post(
             "/api/review/file",
             json={"path": "app.py", "content": "def f():\n    pass\n"},
         )
         self.assertEqual(response.status_code, 200)
+
+
+class ExceptionSanitizationTests(unittest.TestCase):
+    @patch("reviewer.server._analyzer")
+    def test_file_review_500_hides_internal_detail(self, mock_analyzer_factory):
+        mock_analyzer_factory.side_effect = RuntimeError(
+            "Groq key=gsk_secret123 connection failed at internal.host:443"
+        )
+        response = client.post(
+            "/api/review/file",
+            json={"path": "app.py", "content": "def f():\n    pass\n"},
+        )
+        self.assertEqual(response.status_code, 500)
+        body = response.json()
+        self.assertIn("detail", body)
+        self.assertEqual(
+            body["detail"],
+            "An error occurred while processing the review request.",
+        )
+        self.assertNotIn("gsk_secret123", body["detail"])
+        self.assertNotIn("internal.host", body["detail"])
+
+    @patch("reviewer.server._analyzer")
+    def test_diff_review_500_hides_internal_detail(self, mock_analyzer_factory):
+        mock_analyzer_factory.side_effect = ValueError(
+            "path=/etc/passwd not accessible"
+        )
+        response = client.post(
+            "/api/review/diff",
+            json={"file_diffs": [{"file_path": "a.py", "hunks": "+x"}]},
+        )
+        self.assertEqual(response.status_code, 500)
+        body = response.json()
+        self.assertEqual(
+            body["detail"],
+            "An error occurred while processing the review request.",
+        )
+        self.assertNotIn("/etc/passwd", body["detail"])
+
+
+class RateLimitTests(unittest.TestCase):
+    def setUp(self):
+        limiter.reset()
+
+    def test_file_review_rate_limit_enforced(self):
+        @patch("reviewer.server._analyzer")
+        def _run(mock_factory):
+            mock_factory.return_value = FakeAnalyzer([_result("ok", 8, [])])
+            payload = {"path": "x.py", "content": "print(1)\n"}
+
+            for _ in range(30):
+                resp = client.post("/api/review/file", json=payload)
+                self.assertEqual(resp.status_code, 200)
+
+            resp = client.post("/api/review/file", json=payload)
+            self.assertEqual(resp.status_code, 429)
+            self.assertIn("Rate limit", resp.json()["detail"])
+
+        _run()
+
+    def test_diff_review_rate_limit_enforced(self):
+        @patch("reviewer.server._analyzer")
+        def _run(mock_factory):
+            mock_factory.return_value = FakeAnalyzer([_result("ok", 8, [])])
+            payload = {"file_diffs": [{"file_path": "a.py", "hunks": "+x"}]}
+
+            for _ in range(30):
+                resp = client.post("/api/review/diff", json=payload)
+                self.assertEqual(resp.status_code, 200)
+
+            resp = client.post("/api/review/diff", json=payload)
+            self.assertEqual(resp.status_code, 429)
+            self.assertIn("Rate limit", resp.json()["detail"])
+
+        _run()
+
+    def test_health_endpoint_not_rate_limited(self):
+        for _ in range(50):
+            resp = client.get("/health")
+            self.assertEqual(resp.status_code, 200)
+
+
+class HealthCheckTests(unittest.TestCase):
+    def test_check_health_returns_true_when_no_url(self):
+        from reviewer.analyzer import Analyzer
+
+        analyzer = Analyzer.__new__(Analyzer)
+        analyzer.api_url = ""
+        analyzer.api_token = ""
+        self.assertTrue(analyzer.check_health())
+
+    @patch("urllib.request.urlopen")
+    def test_check_health_pings_backend(self, mock_urlopen):
+        from reviewer.analyzer import Analyzer
+
+        mock_response = mock_urlopen.return_value.__enter__.return_value
+        mock_response.status = 200
+
+        with patch.dict(os.environ, {"AI_REVIEW_API_URL": "http://localhost:9999"}, clear=False):
+            analyzer = Analyzer()
+            self.assertTrue(analyzer.check_health(timeout=3))
+
+        request = mock_urlopen.call_args.args[0]
+        self.assertEqual(request.full_url, "http://localhost:9999/health")
+        self.assertEqual(request.method, "GET")
+
+    @patch("urllib.request.urlopen")
+    def test_check_health_returns_false_on_failure(self, mock_urlopen):
+        from reviewer.analyzer import Analyzer
+        import urllib.error
+
+        mock_urlopen.side_effect = urllib.error.URLError("connection refused")
+
+        with patch.dict(os.environ, {"AI_REVIEW_API_URL": "http://localhost:9999"}, clear=False):
+            analyzer = Analyzer()
+            self.assertFalse(analyzer.check_health())
+
+    @patch("urllib.request.urlopen")
+    def test_check_health_sends_bearer_token(self, mock_urlopen):
+        from reviewer.analyzer import Analyzer
+
+        mock_response = mock_urlopen.return_value.__enter__.return_value
+        mock_response.status = 200
+
+        with patch.dict(
+            os.environ,
+            {"AI_REVIEW_API_URL": "http://localhost:9999", "AI_REVIEW_API_TOKEN": "tok123"},
+            clear=False,
+        ):
+            analyzer = Analyzer()
+            analyzer.check_health()
+
+        request = mock_urlopen.call_args.args[0]
+        self.assertEqual(request.headers["Authorization"], "Bearer tok123")
 
 
 if __name__ == "__main__":

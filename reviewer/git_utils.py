@@ -1,8 +1,8 @@
 """Utilities for extracting git diffs using GitPython."""
 
-from dataclasses import dataclass
+from __future__ import annotations
 
-from git import GitCommandError, InvalidGitRepositoryError, Repo
+from dataclasses import dataclass
 
 
 @dataclass
@@ -28,6 +28,8 @@ def get_file_diffs(repo_path: str = ".", ref: str | None = None) -> list[FileDif
     Raises:
         ValueError: If ``repo_path`` is not inside a git repository.
     """
+    from git import GitCommandError, InvalidGitRepositoryError, Repo
+
     try:
         repo = Repo(repo_path, search_parent_directories=True)
     except InvalidGitRepositoryError:
@@ -54,6 +56,8 @@ def get_repo_root(repo_path: str = ".") -> str:
     Raises:
         ValueError: If ``repo_path`` is not inside a git repository.
     """
+    from git import InvalidGitRepositoryError, Repo
+
     try:
         repo = Repo(repo_path, search_parent_directories=True)
     except InvalidGitRepositoryError:
@@ -61,8 +65,9 @@ def get_repo_root(repo_path: str = ".") -> str:
     return repo.working_tree_dir
 
 
-def _diff_without_head(repo: Repo) -> str:
+def _diff_without_head(repo) -> str:
     """Collects staged and unstaged changes in a repository that has no commits yet."""
+    from git import GitCommandError
     parts = []
     for args in (("--cached",), ()):
         try:

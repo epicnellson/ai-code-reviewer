@@ -70,6 +70,29 @@ class Analyzer:
             )
         self.client = Groq(api_key=api_key)
 
+    def check_health(self, timeout: int = 5) -> bool:
+        """Pings the hosted backend's ``/health`` endpoint.
+
+        Returns ``True`` if the backend responds with HTTP 200, ``False``
+        on any connection or response error.  Only meaningful in client mode;
+        in direct mode this always returns ``True``.
+        """
+        if not self.api_url:
+            return True
+
+        url = f"{self.api_url}/health"
+        headers = {}
+        if self.api_token:
+            headers["Authorization"] = f"Bearer {self.api_token}"
+
+        request = urllib.request.Request(url, headers=headers, method="GET")
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                return response.status == 200
+        except Exception:
+            logger.debug("Health check failed for %s", url, exc_info=True)
+            return False
+
     def analyze_file(
         self,
         file_path: str,
