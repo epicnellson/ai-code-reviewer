@@ -184,7 +184,7 @@ Once `DEFAULT_HOSTED_API_URL` is set and pushed, team members run reviews
 with zero configuration:
 
 ```bash
-pip install ai-code-reviewer
+pip install ai-code-checker
 ai-code-review --file src/app.py
 ai-code-review --diff HEAD~1 --ci
 ```

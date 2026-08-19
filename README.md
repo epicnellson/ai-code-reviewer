@@ -1,4 +1,4 @@
-# AI Code Reviewer (`ai-code-reviewer`)
+# AI Code Checker
 
 An intelligent, AST-aware CLI tool and CI action for automated code reviews powered by LLMs (Groq / Llama 3.3). Built for speed, precision, and seamless integration into developer workflows.
 
@@ -19,10 +19,10 @@ An intelligent, AST-aware CLI tool and CI action for automated code reviews powe
 ### Local Installation
 
 ```bash
-pip install ai-code-reviewer
+pip install ai-code-checker
 ```
 
-> **Note:** The package name on PyPI is `ai-code-reviewer`; the executable is `ai-code-review`. Install from source if the package is not yet published:
+> **Note:** The package name on PyPI is `ai-code-checker`; the executable is `ai-code-review`. Install from source if the package is not yet published:
 
 ```bash
 git clone https://github.com/epicnellson/ai-code-reviewer.git
@@ -55,7 +55,7 @@ Deploy the review server once; it holds the Groq API key and every CLI user talk
 ### Deploy the server
 
 ```bash
-pip install "ai-code-reviewer[server]"
+pip install "ai-code-checker[server]"
 
 # Server side: it needs the Groq key, not the clients.
 GROQ_API_KEY=gsk_... AI_REVIEW_API_TOKEN=my-secret ai-review-server
