@@ -25,7 +25,7 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_HOSTED_API_URL = "https://your-hosted-server-url.com"
+DEFAULT_HOSTED_API_URL = "https://ai-code-reviewer-cm9r.onrender.com"
 
 _SERVER_BUSY_MESSAGE = (
     "Server is currently busy or unreachable. "
